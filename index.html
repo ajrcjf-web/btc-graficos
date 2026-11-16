@@ -834,7 +834,7 @@ paint(); selectTab(S.tab);
 // ── datos: archivos publicados por GitHub Actions + Binance en directo desde el navegador ──
 const refBtn=$('refresh'),upd=$('upd');
 const BAPI='https://data-api.binance.vision/api/v3',BWS='wss://data-stream.binance.vision/stream?streams=';
-const WORKER='__WORKER__'; // Cloudflare Worker que trae los datos de Yahoo Finance (acciones e índices)
+const WORKER='https://yahoo-proxy.ajrcjf.workers.dev'; // Cloudflare Worker que trae los datos de Yahoo Finance (acciones e índices)
 const ysym=sym=>{const i=infoOf(sym);return (i&&i.yahoo)||sym};
 function yRows(j,step){const r=j&&j.chart&&j.chart.result&&j.chart.result[0];if(!r||!r.timestamp)return [];const q=r.indicators.quote[0],out=[];
   r.timestamp.forEach((t,k)=>{const o=q.open[k],h=q.high[k],l=q.low[k],c=q.close[k];if(o==null||h==null||l==null||c==null||c<=0)return;out.push([Math.floor(t/step)*step,o,h,l,c,q.volume[k]||0])});return out}
