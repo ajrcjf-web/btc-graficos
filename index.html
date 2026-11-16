@@ -525,6 +525,7 @@ function hlSvg(pw,ph){
     const bw=Math.max(txt.length,sub.length)*6.6+14,bh=34;
     const bx=Math.min(Math.max(2,x-bw/2),pw-bw-2);
     let by=isHi?y-bh-12:y+12;if(by<2)by=Math.min(y+12,ph-bh-2);if(by+bh>ph-2)by=Math.max(2,y-bh-12);
+    const lgB=lg.offsetTop+lg.offsetHeight+4,lgR=lg.offsetLeft+lg.offsetWidth+6;if(bx<lgR&&by<lgB)by=Math.min(ph-bh-2,Math.max(lgB,isHi?y+12:by)); // no tapar la leyenda
     const ly1=isHi?y-3:y+3,ly2=by<y?by+bh:by;
     return `<line x1="${x}" x2="${x}" y1="${ly1}" y2="${ly2}" stroke="${col}" stroke-width="1"/><rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="var(--panel)" stroke="${col}"/>`+
       `<text font-family="IBM Plex Mono,ui-monospace,monospace" font-size="11" text-anchor="middle"><tspan x="${bx+bw/2}" y="${by+14}" fill="${col}" font-weight="600">${esc(txt)}</tspan><tspan x="${bx+bw/2}" y="${by+27}" fill="var(--muted)">${esc(sub)}</tspan></text>`};
@@ -821,7 +822,7 @@ PRESETS.forEach(([lab,list],j)=>{const b=document.createElement('button');b.type
 function presetState(){presetsEl.querySelectorAll('[data-p]').forEach(b=>{b.disabled=PRESETS[+b.dataset.p][1].some(x=>x[2]&&RANK(x[2])<RANK(curTf()))})}
 
 function note(){
-  $('note').textContent='Datos: criptomonedas de Binance (histórico en archivos que actualiza GitHub Actions y precios en directo desde Binance en tu navegador); acciones e índices de Yahoo Finance, actualizados cada 30 minutos y con retraso respecto al mercado. Horas en UTC. Tus espacios de trabajo, listas, indicadores y dibujos se guardan solo en este navegador. '+
+  $('note').textContent='Datos: criptomonedas de Binance (histórico en archivos que actualiza GitHub Actions y precios en directo desde Binance en tu navegador); acciones e índices de Yahoo Finance a través de un Worker de Cloudflare, actualizados cada minuto y con posible retraso respecto al mercado; el buscador encuentra cualquier acción, ETF o índice de Yahoo. Horas en UTC. Tus espacios de trabajo, listas, indicadores y dibujos se guardan solo en este navegador. '+
   'Cada pestaña tiene sus propios indicadores; los dibujos son de cada pestaña y cada activo. Medias de temporalidad mayor que la del gráfico usan el último cierre como provisional dentro de la vela mayor abierta. BMSB 1W: SMA 20 y EMA 21 semanales. RSI de Wilder. '+
   'ATH/ATL: máximo y mínimo de las velas visibles. Ciclo del halving (inspirado en «Bitcoin Halving Cycle Profit» de TradingView): zona verde de +40W a +80W tras cada halving y zona DCA desde +110W; el 5º halving (10/04/2028) es una proyección. Nada de esto es asesoramiento financiero.'}
 
@@ -833,6 +834,15 @@ paint(); selectTab(S.tab);
 // ── datos: archivos publicados por GitHub Actions + Binance en directo desde el navegador ──
 const refBtn=$('refresh'),upd=$('upd');
 const BAPI='https://data-api.binance.vision/api/v3',BWS='wss://data-stream.binance.vision/stream?streams=';
+const WORKER='__WORKER__'; // Cloudflare Worker que trae los datos de Yahoo Finance (acciones e índices)
+const ysym=sym=>{const i=infoOf(sym);return (i&&i.yahoo)||sym};
+function yRows(j,step){const r=j&&j.chart&&j.chart.result&&j.chart.result[0];if(!r||!r.timestamp)return [];const q=r.indicators.quote[0],out=[];
+  r.timestamp.forEach((t,k)=>{const o=q.open[k],h=q.high[k],l=q.low[k],c=q.close[k];if(o==null||h==null||l==null||c==null||c<=0)return;out.push([Math.floor(t/step)*step,o,h,l,c,q.volume[k]||0])});return out}
+const yGet=(sym,iv,rng)=>fetch(`${WORKER}/chart?symbol=${encodeURIComponent(sym)}&interval=${iv}&range=${rng}`).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()});
+let yPoll=0;
+async function fillYahoo(my,sym,full){const y=ysym(sym);
+  const [d,h]=await Promise.all([yGet(y,'1d',full?'max':'5d'),yGet(y,'60m',full?'730d':'5d')]);if(my!==loadSeq)return;
+  merge(LIVE[0],yRows(d,DAY));merge(LIVE[1],yRows(h,HOUR))}
 const LIVE=[{key:'d1',bar:DAY,iv:'1d'},{key:'h1',bar:HOUR,iv:'1h'}];
 let lastOk=null,errs={},busy=false,mcpRef=null,dbRef=null,loadSeq=0,sock=null,sockT=0,renderT=0,live=false;
 const withTimeout=(p,ms)=>Promise.race([p,new Promise(r=>setTimeout(()=>r(null),ms))]);
@@ -866,7 +876,7 @@ function showStatus(){
   if(busy){upd.className='upd';upd.textContent='Actualizando…';return}
   if(errs.bn){upd.className='upd warn';upd.textContent='Sin conexión con Binance';upd.title=errs.bn;return}
   if(pairOf(S.sym)){upd.className='upd';upd.textContent=live?'En directo · Binance':lastOk?'Actualizado '+hm(lastOk):'Conectando…';upd.title='';return}
-  upd.className='upd';upd.textContent=lastBar?'Última vela '+fdate(lastBar,true):'Sin datos';upd.title='Acciones e índices: Yahoo Finance, se actualizan cada 30 minutos (con retraso)';
+  upd.className='upd';upd.textContent=lastOk?'Yahoo Finance · '+hm(lastOk):lastBar?'Última vela '+fdate(lastBar,true):'Sin datos';upd.title='Acciones e índices: Yahoo Finance, se actualiza cada minuto (puede llevar retraso respecto al mercado)';
 }
 async function loadFiles(sym){const [h,d]=await Promise.all(['1h','1d'].map(iv=>fetch(`data/${sym}_${iv}.json`,{cache:'no-cache'}).then(r=>r.ok?r.json():null).catch(()=>null)));
   return {h1:h?toRows(h):[],d1:d?toRows(d):[]}}
@@ -878,11 +888,14 @@ async function loadSymbol(keep){
   if(info&&info.end_1d){NB=await loadFiles(sym);if(my!==loadSeq)return}
   BASE=NB;
   const setPrec=()=>{PREC=calcPrec((BASE.d1[BASE.d1.length-1]||BASE.h1[BASE.h1.length-1]||[0,0,0,0,1])[4]);cache={}};
+  clearInterval(yPoll);
+  if(!pair&&WORKER.startsWith('http')){try{await fillYahoo(my,sym,!(info&&info.end_1d));lastOk=new Date()}catch(e){errs.y=String(e&&e.message||e)}if(my!==loadSeq)return;
+    yPoll=setInterval(async()=>{if(document.hidden||S.sym!==sym)return;try{await fillYahoo(loadSeq,sym,false);lastOk=new Date();soon()}catch(e){}},60e3)}
   if(pair){try{await fillL(my,pair,LIVE[0]);if(my!==loadSeq)return;
       if(!keep&&!(info&&info.end_1d)){setPrec();render(false);keep=true} // activo sin archivos: se ve el diario en cuanto llega
       await fillL(my,pair,LIVE[1]);lastOk=new Date()}catch(e){errs.bn=String(e&&e.message||e)}if(my!==loadSeq)return}
   setPrec();
-  $('empty').textContent=pair?`No se pudieron cargar los datos de ${sym} desde Binance.`:`${sym} todavía no está disponible.`;
+  $('empty').textContent=pair?`No se pudieron cargar los datos de ${sym} desde Binance.`:`No se pudieron cargar los datos de ${sym} desde Yahoo Finance.`;
   render(!!keep);note();showStatus();renderWl();if(pair)openSock(sym,pair);
 }
 async function refreshAll(){if(busy)return;busy=true;showStatus();try{await loadSymbol(true);await loadTickers()}finally{busy=false;showStatus()}}
@@ -890,7 +903,7 @@ refBtn.addEventListener('click',refreshAll);
 // acciones e índices: GitHub Actions publica datos nuevos cada 30 min; la página lo comprueba cada 5 min
 setInterval(async()=>{if(document.hidden)return;try{const idx=await fetch('data/index.json',{cache:'no-cache'}).then(r=>r.json());
   const old=infoOf(S.sym),nw=idx.symbols.find(x=>x.sym===S.sym);INDEX=idx;
-  if(!pairOf(S.sym)&&nw&&(!old||nw.end_1h!==old.end_1h||nw.end_1d!==old.end_1d))loadSymbol(true);renderWl()}catch(e){}},5*60e3);
+  if(!pairOf(S.sym)&&!WORKER.startsWith('http')&&nw&&(!old||nw.end_1h!==old.end_1h||nw.end_1d!==old.end_1d))loadSymbol(true);renderWl()}catch(e){}},5*60e3);
 
 // ── activos: principales, mi lista y buscador (Binance, acciones e índices publicados) ──
 let BINL=[],STK=[];
@@ -898,8 +911,13 @@ let WL={cur:'l1',lists:[{id:'l1',name:'Mi lista',symbols:[]}]},INSTR=null;
 const curList=()=>WL.lists.find(l=>l.id===WL.cur)||WL.lists[0];
 const symBtn=$('symBtn'),symPanel=$('symPanel'),symQ=$('symQ'),symList=$('symList');
 async function loadInstruments(){}
+const YS={};let ysT=0;
+function ySearch(raw){if(!WORKER.startsWith('http'))return;const q=raw.replace(/[^A-Z0-9]/g,'');if(!q||YS[q])return;clearTimeout(ysT);
+  ysT=setTimeout(async()=>{try{const j=await fetch(`${WORKER}/search?q=${encodeURIComponent(raw)}`).then(r=>r.json());
+    YS[q]=(j.quotes||[]).filter(x=>['EQUITY','ETF','INDEX'].includes(x.quoteType)&&x.symbol).map(x=>({sym:x.symbol.toUpperCase(),name:x.shortname||x.longname||'',exch:x.exchDisp||x.exchange||'',type:'stock',yahoo:true}));
+    if(!symPanel.hidden)buildSymList()}catch(e){YS[q]=[]}},300)}
 function infoOf(sym){return INDEX.symbols.find(x=>x.sym===sym)}
-function status(sym,it){const i=infoOf(sym);if(i&&(i.type==='index'||i.type==='stock'))return (i.name||sym)+(i.start_1d?' · desde '+new Date(i.start_1d*1000).getUTCFullYear():'');
+function status(sym,it){const i=infoOf(sym);if(it&&it.yahoo)return [it.name,it.exch].filter(Boolean).join(' · ');if(i&&(i.type==='index'||i.type==='stock'))return (i.name||sym)+(i.start_1d?' · desde '+new Date(i.start_1d*1000).getUTCFullYear():'');
   if(!i||!i.end_1d)return 'Binance · en directo';
   return (i.top?'#'+i.rank+' · ':'')+'desde '+new Date(i.start_1d*1000).getUTCFullYear()}
 function itemHtml(it){const on=curList().symbols.some(w=>w.sym===it.sym);return `<div class="si"><button type="button" class="sel" data-sym="${esc(it.sym)}" data-cdc="${esc(it.cdc||'')}" data-type="${esc(it.type||'crypto')}" aria-current="${it.sym===S.sym}">${esc(it.sym)}<small>${esc(status(it.sym,it))}</small></button>`+
@@ -912,7 +930,10 @@ function buildSymList(){const raw=symQ.value.trim().toUpperCase(),q=raw.replace(
     h+=`<div class="sh">Principales</div>`+top.map(itemHtml).join('')}
   else{const all=new Map();top.forEach(x=>all.set(x.sym,x));INDEX.symbols.forEach(x=>all.has(x.sym)||all.set(x.sym,x));WL.lists.forEach(l=>l.symbols.forEach(x=>all.has(x.sym)||all.set(x.sym,x)));BINL.forEach(b=>all.has(b)||all.set(b,{sym:b,cdc:'',type:'crypto'}));
     const res=[...all.values()].filter(x=>x.sym.includes(q)||(x.name&&x.name.toUpperCase().replace(/[^A-Z0-9]/g,'').includes(q))).sort((a,b)=>(b.sym.startsWith(q)-a.sym.startsWith(q))||((infoOf(a.sym)||{}).rank||999)-((infoOf(b.sym)||{}).rank||999)||a.sym.localeCompare(b.sym)).slice(0,80);
-    h+=res.length?res.map(itemHtml).join(''):'<div class="snote">Sin resultados. Las acciones que no aparecen se podrán añadir más adelante.</div>'}
+    const yq=(YS[q]||[]).filter(x=>!all.has(x.sym)&&!INDEX.symbols.some(i=>i.yahoo===x.sym));
+    h+=res.map(itemHtml).join('')+(yq.length?`<div class="sh">Acciones e índices (Yahoo Finance)</div>`+yq.map(itemHtml).join(''):'');
+    if(!res.length&&!yq.length)h+=`<div class="snote">${WORKER.startsWith('http')?(YS[q]?'Sin resultados.':'Buscando…'):'Sin resultados.'}</div>`;
+    ySearch(raw)}
   symList.innerHTML=h}
 function openSym(){symPanel.hidden=false;const r=symBtn.getBoundingClientRect();symPanel.style.left=Math.min(r.left,innerWidth-symPanel.offsetWidth-12)+'px';symPanel.style.top=(r.bottom+6)+'px';
   symQ.value='';buildSymList();symQ.focus();loadInstruments()}
@@ -930,7 +951,7 @@ function saveWatch(){try{localStorage.setItem('btc-graficos-wl',JSON.stringify(W
   if(dbRef){const all=[];WL.lists.forEach(l=>l.symbols.forEach(x=>{if(!all.some(y=>y.sym===x.sym))all.push({sym:x.sym,cdc:x.cdc||'',type:x.type||'crypto'})}));
     dbRef.doc('config/watchlists').set({cur:WL.cur,lists:WL.lists,updatedAt:Date.now()}).catch(()=>{});
     dbRef.doc('config/watchlist').set({symbols:all,updatedAt:Date.now()}).catch(()=>{})} // la tarea diaria lee esta lista
-  renderWl()}
+  renderWl();loadTickers()}
 async function loadWatch(){
   try{const w=JSON.parse(localStorage.getItem('btc-graficos-wl'));if(w&&Array.isArray(w.lists)&&w.lists.length)WL=w;
     else{const old=JSON.parse(localStorage.getItem('btc-graficos-watch'));if(Array.isArray(old))WL.lists[0].symbols=old}}catch(e){}
@@ -942,14 +963,17 @@ async function loadWatch(){
 // ── panel de watchlist (precios de Binance; acciones e índices con el último dato publicado) ──
 let TICK={};
 const wlEl=$('wl'),wlSel=$('wlSel'),wlRows=$('wlRows');
-async function loadTickers(){const ps=[...new Set(curList().symbols.map(x=>pairOf(x.sym)).filter(Boolean))];if(!ps.length||!S.wlOpen)return;
+async function loadTickers(){if(!S.wlOpen)return;const ps=[...new Set(curList().symbols.map(x=>pairOf(x.sym)).filter(Boolean))];
+  if(WORKER.startsWith('http'))curList().symbols.filter(x=>!pairOf(x.sym)).forEach(x=>{yGet(ysym(x.sym),'1d','5d').then(j=>{const m=j.chart.result[0].meta;
+    if(m&&m.regularMarketPrice){TICK['Y:'+x.sym]={last:m.regularMarketPrice,ch:m.chartPreviousClose?(m.regularMarketPrice/m.chartPreviousClose-1)*100:null};renderWl()}}).catch(()=>{})});
+  if(!ps.length)return;
   try{const r=await fetch(`${BAPI}/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(ps))}`);if(!r.ok)return;
     (await r.json()).forEach(t=>{TICK[t.symbol]={last:+t.lastPrice,ch:+t.priceChangePercent}});renderWl()}catch(e){}}
 function startTickers(){loadTickers()}
 setInterval(()=>{if(!document.hidden)loadTickers()},30e3);
 function quoteOf(it){
   if(it.sym===S.sym&&R.length>1){const a=R[n][4],b=(BASE.d1.length>1?BASE.d1[BASE.d1.length-2][4]:R[n-1][4]);return {last:a,ch:BASE.d1.length>1?(a/b-1)*100:null}}
-  const p=pairOf(it.sym),t=p&&TICK[p];if(t)return t;
+  const p=pairOf(it.sym),t=p?TICK[p]:TICK['Y:'+it.sym];if(t)return t;
   const i=infoOf(it.sym);if(i&&i.last)return {last:i.last,ch:i.prev?(i.last/i.prev-1)*100:null};
   if(i&&i.end_1d){const c=FQ[it.sym];if(c)return c.q;FQ[it.sym]={q:null};
     fetch(`data/${it.sym}_1d.json`).then(r=>r.ok?r.json():null).then(o=>{if(o&&o.c&&o.c.length>1){const a=o.c[o.c.length-1],b=o.c[o.c.length-2];FQ[it.sym]={q:{last:a,ch:(a/b-1)*100}};renderWl()}}).catch(()=>{})}
