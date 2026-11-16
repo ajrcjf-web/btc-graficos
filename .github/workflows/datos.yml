@@ -1,0 +1,71 @@
+name: Actualizar datos y publicar
+
+on:
+  schedule:
+    - cron: '7,37 * * * *'   # cada 30 minutos (UTC); GitHub puede retrasarlo en horas de mucha carga
+  workflow_dispatch:          # botón «Run workflow» para ejecutarlo a mano
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Recuperar los datos de la ejecución anterior
+        uses: actions/cache/restore@v4
+        with:
+          path: work-data
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+
+      - name: Preparar datos (primera vez desde data/, y activos nuevos añadidos al repositorio)
+        run: |
+          if [ ! -f work-data/index.json ]; then mkdir -p work-data && cp data/*.json work-data/; fi
+          python3 - <<'PY'
+          import json
+          seed = json.load(open('data/index.json')); cur = json.load(open('work-data/index.json'))
+          have = {s['sym'] for s in cur['symbols']}
+          cur['symbols'] += [s for s in seed['symbols'] if s['sym'] not in have]
+          json.dump(cur, open('work-data/index.json', 'w'), separators=(',', ':'))
+          PY
+          cp data/stocks.json work-data/stocks.json
+
+      - name: Actualizar (Binance, Yahoo Finance, Crypto.com)
+        run: python3 -I tools/update.py work-data --cdc-rest
+
+      - name: Guardar los datos para la próxima ejecución
+        uses: actions/cache/save@v4
+        with:
+          path: work-data
+          key: data-${{ github.run_id }}
+
+      - name: Montar el sitio
+        run: |
+          mkdir -p _site/data
+          cp index.html _site/
+          cp work-data/*.json _site/data/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
